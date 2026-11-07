@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D 模型构建 · 3D Model Construction</title>
+<meta name="description" content="纯 CPU 软件光栅器极光启动动画、桌面叠层，以及从单张 2D 俯视地图截图重建 3D 地形与建筑模型。含完整原理说明与下载。">
+<style>
+  :root{
+    --bg:#070b14;
+    --bg2:#0b1220;
+    --card:rgba(255,255,255,.045);
+    --line:rgba(255,255,255,.10);
+    --line-strong:rgba(255,255,255,.18);
+    --fg:#e9eff9;
+    --muted:#97a7bd;
+    --dim:#6b7c94;
+    --green:#9bff7a;   /* 557.7nm 氧原子黄绿 */
+    --cyan:#3fd8ff;    /* 上部淡青 */
+    --violet:#8b6bff;  /* 427.8nm 蓝紫 */
+    --magenta:#e055d8; /* 630nm / 品红 */
+    --amber:#ffc46b;
+    --mono:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
+    line-height:1.75;-webkit-font-smoothing:antialiased;overflow-x:hidden;
+  }
+  a{color:inherit;text-decoration:none}
+
+  /* ---------- 极光背景：两层帘幕 + 细丝缕，纯 CSS ---------- */
+  .sky{position:fixed;inset:0;z-index:-2;overflow:hidden;pointer-events:none;
+    background:radial-gradient(140% 90% at 50% -20%,#12203a 0%,#0a1120 45%,var(--bg) 100%);}
+  .sky::before,.sky::after{
+    content:"";position:absolute;left:-30%;right:-30%;top:-35%;height:95%;
+    filter:blur(60px);opacity:.42;mix-blend-mode:screen;
+    background:
+      radial-gradient(60% 55% at 18% 80%,rgba(155,255,122,.55),transparent 70%),
+      radial-gradient(55% 50% at 45% 70%,rgba(63,216,255,.45),transparent 72%),
+      radial-gradient(50% 55% at 72% 62%,rgba(139,107,255,.50),transparent 72%),
+      radial-gradient(45% 50% at 92% 55%,rgba(224,85,216,.42),transparent 72%);
+    transform:skewX(-12deg);
+    animation:drift 26s ease-in-out infinite alternate;
+  }
+  .sky::after{opacity:.26;top:-20%;height:70%;filter:blur(90px);
+    animation-duration:38s;animation-direction:alternate-reverse;
+    background:
+      radial-gradient(50% 60% at 30% 70%,rgba(155,255,122,.6),transparent 70%),
+      radial-gradient(50% 60% at 75% 60%,rgba(224,85,216,.5),transparent 70%);}
+  .rays{position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.10;
+    background:repeating-linear-gradient(96deg,transparent 0 3px,rgba(190,255,220,.55) 3px 4px,transparent 4px 11px);
+    -webkit-mask-image:linear-gradient(to bottom,transparent 0%,#000 45%,transparent 78%);
+    mask-image:linear-gradient(to bottom,transparent 0%,#000 45%,transparent 78%);
+    animation:raymove 14s linear infinite;}
+  @keyframes drift{from{transform:skewX(-12deg) translateX(-4%) scaleY(1)}
+                   to{transform:skewX(6deg) translateX(5%) scaleY(1.12)}}
+  @keyframes raymove{from{background-position:0 0}to{background-position:220px 0}}
+
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+
+  /* ---------- Hero ---------- */
+  header.hero{padding:96px 0 72px;text-align:center;position:relative}
+  .badge{display:inline-flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center;
+    font:500 12px/1.4 var(--mono);letter-spacing:.06em;color:var(--green);
+    border:1px solid rgba(155,255,122,.28);background:rgba(155,255,122,.07);
+    padding:7px 14px;border-radius:99px;margin-bottom:28px}
+  .badge i{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 12px var(--green)}
+  h1{font-size:clamp(38px,7vw,72px);line-height:1.1;margin:0 0 18px;font-weight:800;letter-spacing:-.02em;
+    background:linear-gradient(100deg,var(--green) 0%,var(--cyan) 38%,var(--violet) 68%,var(--magenta) 100%);
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{max-width:760px;margin:0 auto;color:var(--muted);font-size:clamp(15px,2vw,19px)}
+  .sub strong{color:var(--fg);font-weight:600}
+  .meta{margin:30px auto 0;display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+  .meta span{font:12px/1 var(--mono);color:var(--dim);border:1px solid var(--line);
+    padding:8px 12px;border-radius:8px;background:var(--card)}
+  .meta span b{color:var(--fg);font-weight:600}
+
+  /* ---------- 下载按钮 ---------- */
+  .downloads{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;margin-top:40px}
+  .btn{display:inline-flex;align-items:center;gap:10px;padding:13px 20px;border-radius:12px;
+    font-size:14px;font-weight:600;border:1px solid var(--line-strong);background:var(--card);
+    color:var(--fg);transition:.2s ease;white-space:nowrap;backdrop-filter:blur(8px)}
+  .btn:hover{transform:translateY(-2px);border-color:rgba(255,255,255,.35);background:rgba(255,255,255,.09)}
+  .btn .ico{font-family:var(--mono);font-size:15px;color:var(--dim)}
+  .btn small{display:block;font:11px/1.3 var(--mono);color:var(--dim);font-weight:400;text-align:left;margin-top:2px}
+  .btn .txt{text-align:left;line-height:1.25}
+  .btn.primary{
+    background:linear-gradient(100deg,rgba(155,255,122,.16),rgba(63,216,255,.16),rgba(224,85,216,.16));
+    border-color:rgba(155,255,122,.45);color:#fff;
+    box-shadow:0 8px 40px rgba(63,216,255,.12)}
+  .btn.primary:hover{box-shadow:0 10px 46px rgba(155,255,122,.22)}
+  .btn.primary .ico{color:var(--green)}
+  .btn.ghost{background:transparent}
+
+  /* ---------- 通用区块 ---------- */
+  section{padding:64px 0;border-top:1px solid rgba(255,255,255,.06)}
+  .eyebrow{font:600 12px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;
+    color:var(--cyan);margin:0 0 14px}
+  h2{font-size:clamp(25px,3.6vw,36px);margin:0 0 14px;letter-spacing:-.01em;font-weight:750}
+  h3{font-size:19px;margin:32px 0 10px;font-weight:700;color:var(--fg)}
+  h4{font-size:15px;margin:0 0 8px;font-weight:700;color:var(--fg)}
+  p{color:var(--muted);margin:0 0 16px;max-width:820px}
+  p.lead{font-size:17px;color:#c9d5e6}
+  strong{color:var(--fg)}
+  code{font:13px/1.5 var(--mono);background:rgba(255,255,255,.07);border:1px solid var(--line);
+    padding:2px 6px;border-radius:5px;color:var(--green)}
+  .q{color:var(--fg);font-weight:650}  /* 启发式小标题 */
+  .hint{font-size:13px;color:var(--dim);margin-top:10px}
+
+  /* ---------- 卡片 ---------- */
+  .grid{display:grid;gap:18px;margin-top:34px}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;
+    padding:24px;backdrop-filter:blur(10px);transition:.2s}
+  .card:hover{border-color:var(--line-strong);background:rgba(255,255,255,.065)}
+  .card .tag{font:600 11px/1 var(--mono);letter-spacing:.1em;color:var(--dim);
+    border:1px solid var(--line);padding:5px 9px;border-radius:6px;display:inline-block;margin-bottom:16px}
+  .card h3{margin:0 0 10px;font-size:20px}
+  .card p{font-size:14px;margin:0 0 14px}
+  .card figure{margin:0;border-radius:10px;overflow:hidden;border:1px solid var(--line);background:#05080f}
+  .card figure img{display:block;width:100%;height:auto}
+  .card figcaption{font:11px/1.5 var(--mono);color:var(--dim);padding:8px 10px;background:rgba(0,0,0,.25)}
+  .kv{display:flex;justify-content:space-between;gap:12px;font:12px/1.6 var(--mono);
+    border-top:1px dashed var(--line);padding:8px 0;color:var(--dim)}
+  .kv b{color:var(--fg);font-weight:600}
+
+  /* ---------- 下载清单 ---------- */
+  table{width:100%;border-collapse:collapse;margin-top:26px;font-size:14px}
+  th,td{text-align:left;padding:13px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+  th{font:600 11px/1.4 var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+  td:first-child{font-family:var(--mono);font-size:13px;color:var(--fg)}
+  td .desc{color:var(--dim);font-size:12px}
+  .dl{display:inline-block;font:600 12px/1 var(--mono);padding:8px 12px;border-radius:8px;
+    border:1px solid rgba(63,216,255,.35);background:rgba(63,216,255,.08);color:var(--cyan);white-space:nowrap}
+  .dl:hover{background:rgba(63,216,255,.18)}
+
+  /* ---------- 管线步骤 ---------- */
+  .pipe{margin-top:30px;display:flex;flex-direction:column;gap:0}
+  .step{display:grid;grid-template-columns:52px 1fr;gap:16px;position:relative;padding-bottom:18px}
+  .step:last-child{padding-bottom:0}
+  .step .n{font:700 13px/1 var(--mono);color:var(--bg);background:var(--cyan);
+    width:34px;height:34px;border-radius:50%;display:grid;place-items:center;
+    box-shadow:0 0 0 5px rgba(63,216,255,.10);position:relative;z-index:1}
+  .step:not(:last-child)::before{content:"";position:absolute;left:16.5px;top:34px;bottom:-2px;
+    width:1px;background:linear-gradient(var(--cyan),rgba(139,107,255,.35))}
+  .step .body{padding-top:3px}
+  .step .body b{display:block;font-size:15px;margin-bottom:3px;color:var(--fg)}
+  .step .body span{font-size:13px;color:var(--muted)}
+  .step.star .n{background:var(--green);box-shadow:0 0 0 5px rgba(155,255,122,.12)}
+
+  /* ---------- 谱线表 / 代码块 ---------- */
+  .spectrum{margin-top:24px;border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .spectrum .bar{height:9px;background:linear-gradient(90deg,
+      #2b6bff 0%,#8b6bff 14%,#3fd8ff 34%,#9bff7a 55%,#c8ff8a 68%,#e055d8 88%,#ff6b8a 100%)}
+  .spectrum .labels{display:flex;justify-content:space-between;padding:9px 14px;
+    font:11px/1.4 var(--mono);color:var(--dim);background:rgba(0,0,0,.22)}
+  pre{background:rgba(0,0,0,.32);border:1px solid var(--line);border-radius:12px;
+    padding:18px 20px;overflow-x:auto;font:12.5px/1.8 var(--mono);color:#c7d6ea;margin:20px 0}
+  pre .c{color:var(--dim)}   /* 注释 */
+  pre .k{color:var(--green)} /* 关键字/数值 */
+  pre .v{color:var(--cyan)}
+
+  .callout{margin:26px 0;padding:18px 20px;border-left:3px solid var(--green);
+    background:rgba(155,255,122,.055);border-radius:0 12px 12px 0}
+  .callout b{color:var(--green)}
+  .callout p{margin:6px 0 0;font-size:14px}
+
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:28px}
+  ul.clean{list-style:none;padding:0;margin:12px 0 0}
+  ul.clean li{font-size:14px;color:var(--muted);padding:9px 0 9px 20px;position:relative;
+    border-bottom:1px dashed rgba(255,255,255,.07)}
+  ul.clean li::before{content:"—";position:absolute;left:0;color:var(--violet);font-family:var(--mono)}
+  ul.clean li b{color:var(--fg)}
+
+  /* ---------- Footer ---------- */
+  footer{padding:44px 0 60px;border-top:1px solid var(--line);color:var(--dim);font-size:13px}
+  footer .row{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:center}
+  footer a{color:var(--cyan)}
+  footer a:hover{text-decoration:underline}
+  .foot-links{display:flex;gap:18px;flex-wrap:wrap;font-family:var(--mono);font-size:12px}
+
+  @media(max-width:820px){
+    .g2,.g3,.cols{grid-template-columns:1fr}
+    header.hero{padding:64px 0 48px}
+    table{font-size:13px}
+    th:nth-child(3),td:nth-child(3){display:none}
+  }
+</style>
+</head>
+<body>
+<div class="sky"></div><div class="rays"></div>
+
+<div class="wrap">
+
+<!-- ============ HERO ============ -->
+<header class="hero">
+  <div class="badge"><i></i> 纯 CPU · 零 GPU 依赖 · 离线可用 <i></i> 2 条技术线 / 81 个文件</div>
+  <h1>3D 模型构建</h1>
+  <p class="sub">一个值得先问的问题：<strong>没有 GPU、没有真实数据源，还能把三维世界「算」出来吗？</strong><br>
+     这个仓库用两条完全不同的路径回答了它 —— 一条把像素逐点算成光，一条把一张平面图反推成体块。</p>
+  <div class="meta">
+    <span>仓库 <b>180lisilence/3D-model-construction</b></span>
+    <span>分支 <b>main</b></span>
+    <span>模型 <b>20,351 顶点 / 40,062 面</b></span>
+    <span>渲染 <b>~37 fps @ 1600×900</b></span>
+  </div>
+
+  <div class="downloads">
+    <a class="btn primary" href="https://github.com/180lisilence/3D-model-construction/archive/refs/heads/main.zip">
+      <span class="ico">↓</span>
+      <span class="txt">下载完整项目 ZIP<small>源码 + 可执行文件 + 模型 + 效果图，约 20 MB</small></span>
+    </a>
+    <a class="btn" href="3D/AuroraLauncher.exe" download>
+      <span class="ico">▸</span>
+      <span class="txt">启动动画 EXE<small>3D/AuroraLauncher.exe</small></span>
+    </a>
+    <a class="btn" href="3D/PhysxPUBGMock.exe" download>
+      <span class="ico">◈</span>
+      <span class="txt">桌面叠层 EXE<small>3D/PhysxPUBGMock.exe</small></span>
+    </a>
+    <a class="btn" href="map3d/miramar.obj" download>
+      <span class="ico">◇</span>
+      <span class="txt">3D 模型 OBJ<small>map3d/miramar.obj</small></span>
+    </a>
+    <a class="btn ghost" href="https://github.com/180lisilence/3D-model-construction" target="_blank" rel="noopener">
+      <span class="ico">↗</span>
+      <span class="txt">浏览源码<small>GitHub 仓库</small></span>
+    </a>
+  </div>
+  <p class="hint" style="text-align:center;margin-top:16px">EXE / OBJ 按钮在 GitHub Pages 同源环境下可直接下载；若浏览器直接打开文本，右键「另存为」即可。</p>
+</header>
+
+<!-- ============ 概览 ============ -->
+<section id="overview">
+  <p class="eyebrow">01 / Overview</p>
+  <h2>两条技术线，一个共同的约束</h2>
+  <p class="lead">先看清楚约束，才能看懂后面的每个设计选择：这台机器上没有可用的 GPU 管线、没有游戏进程内存、没有 Embree / TBB 的 DLL，甚至没有 numpy。于是所有东西都必须用 CPU 和纯手写的数据结构补齐。</p>
+
+  <div class="grid g2">
+    <article class="card">
+      <span class="tag">PROJECT A · 3D/</span>
+      <h3>纯 CPU 软件光栅器</h3>
+      <p>把三角形网格逐像素画成线框与极光，两个外壳共用同一套渲染管线：<strong>启动动画</strong>（不透明全屏，9 秒播完自动退出）与<strong>桌面叠层</strong>（透明穿透窗口，鼠标转视角 + 射线命中）。</p>
+      <figure>
+        <img src="3D/shots/final2.png" alt="架空木构场景与极光天空的渲染效果图" loading="lazy">
+        <figcaption>3D/shots/final2.png · 极光 + 架空木构 + 瓷砖地板</figcaption>
+      </figure>
+      <div class="kv"><span>渲染分辨率</span><b>1600×900 → DWM 拉伸</b></div>
+      <div class="kv"><span>帧时间</span><b>26~28 ms（约 37 fps）</b></div>
+      <div class="kv"><span>极光</span><b>逐像素 CPU，约 11 ms</b></div>
+      <div class="kv"><span>窗口</span><b>WS_EX_LAYERED + UpdateLayeredWindow</b></div>
+    </article>
+
+    <article class="card">
+      <span class="tag">PROJECT B · map3d/</span>
+      <h3>从 2D 截图重建 3D 模型</h3>
+      <p>输入一张 <strong>658×481 的正交俯视地图截图</strong>，输出可导入 Blender / Unity / UE 的标准 OBJ：带地形起伏、贴图 UV 与 11 栋建筑体块。全程纯 Python + PIL 手写软光栅器。</p>
+      <figure>
+        <img src="map3d/compare.png" alt="输入截图、俯视还原、斜视 3D 与等轴测的四联对比图" loading="lazy">
+        <figcaption>map3d/compare.png · 输入 / 俯视还原 / 斜视 / 等轴测</figcaption>
+      </figure>
+      <div class="kv"><span>场景范围</span><b>609.3 × 445.4 m</b></div>
+      <div class="kv"><span>地形高度</span><b>-25.3 ~ +35.4 m</b></div>
+      <div class="kv"><span>地形网格</span><b>166 × 122 顶点（步长 4 px）</b></div>
+      <div class="kv"><span>输出</span><b>20,351 顶点 / 40,062 面</b></div>
+    </article>
+  </div>
+
+  <div class="grid g3" style="margin-top:18px">
+    <article class="card">
+      <h4>△ 影子头文件替换</h4>
+      <p>编译时 <code>/I mock</code> 排在前面，同名影子头优先命中，原工程代码一行不改 —— 它甚至不知道自己在读假数据。</p>
+    </article>
+    <article class="card">
+      <h4>△ 自写 BVH</h4>
+      <p><code>EmbreeCompat.h</code> 用 BVH + Möller-Trumbore 求交补齐 Embree4 的 API 子集，替掉缺失的 DLL。</p>
+    </article>
+    <article class="card">
+      <h4>△ 合成场景即验证器</h4>
+      <p><code>MockScene.h</code> 按真实 PhysX 结构体布局摆场景；偏移一旦写错，读出来是垃圾值而非空画面，所以 mock 本身就是布局验证器。</p>
+    </article>
+  </div>
+</section>
+
+<!-- ============ 下载清单 ============ -->
+<section id="download">
+  <p class="eyebrow">02 / Downloads</p>
+  <h2>下载清单</h2>
+  <p>所有文件都在 <code>main</code> 分支根目录，可直接取用。EXE 为已编译产物，双击即可运行；OBJ 需与同目录的 <code>.mtl</code>、<code>.png</code> 放在一起才能正确关联贴图。</p>
+
+  <table>
+    <thead><tr><th>文件</th><th>说明</th><th>大小</th><th>下载</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>完整项目 ZIP</td>
+        <td>全部 81 个文件（源码 / 产物 / 文档 / 效果图）<span class="desc"><br>推荐：一次拿全，不会漏掉贴图与材质</span></td>
+        <td>~20 MB</td>
+        <td><a class="dl" href="https://github.com/180lisilence/3D-model-construction/archive/refs/heads/main.zip">↓ ZIP</a></td>
+      </tr>
+      <tr>
+        <td>3D/AuroraLauncher.exe</td>
+        <td>启动动画：极光天空 + 架空木构，全屏 9 秒<span class="desc"><br>ESC / 空格 / 点击可跳过，播完自动退出</span></td>
+        <td>558 KB</td>
+        <td><a class="dl" href="3D/AuroraLauncher.exe" download>↓ EXE</a></td>
+      </tr>
+      <tr>
+        <td>3D/PhysxPUBGMock.exe</td>
+        <td>桌面叠层：半透明穿透窗口，中键拖动转视角<span class="desc"><br>F8 退出</span></td>
+        <td>620 KB</td>
+        <td><a class="dl" href="3D/PhysxPUBGMock.exe" download>↓ EXE</a></td>
+      </tr>
+      <tr>
+        <td>map3d/miramar.obj</td>
+        <td>主交付模型：地形 + 11 栋四坡顶建筑<span class="desc"><br>需配套 miramar.mtl 与 miramar_tex.png</span></td>
+        <td>2.17 MB</td>
+        <td><a class="dl" href="map3d/miramar.obj" download>↓ OBJ</a></td>
+      </tr>
+      <tr>
+        <td>map3d/miramar.mtl + _tex.png</td>
+        <td>材质文件与地形贴图（UV 逐像素对应输入截图）</td>
+        <td>575 KB</td>
+        <td><a class="dl" href="map3d/miramar.mtl" download>↓ MTL</a> <a class="dl" href="map3d/miramar_tex.png" download>↓ PNG</a></td>
+      </tr>
+      <tr>
+        <td>map3d/meta.json</td>
+        <td>中间数据：高度场、建筑清单、比例参数与压平后的地基高度</td>
+        <td>240 KB</td>
+        <td><a class="dl" href="map3d/meta.json" download>↓ JSON</a></td>
+      </tr>
+      <tr>
+        <td>3D/core/ 源码</td>
+        <td>完整 C++ 源码（渲染器 / 极光 / 场景 / 数学库 / 影子头）</td>
+        <td>—</td>
+        <td><a class="dl" href="archive/refs/heads/main.zip">↓ 随 ZIP</a></td>
+      </tr>
+      <tr>
+        <td>文档 ×4</td>
+        <td>Readme / 使用手册 / 制作思路 / 实现方向 + map3d/README</td>
+        <td>—</td>
+        <td><a class="dl" href="archive/refs/heads/main.zip">↓ 随 ZIP</a></td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="hint">直链备用（跨域或 Pages 未生效时）：
+    <code>https://raw.githubusercontent.com/180lisilence/3D-model-construction/main/&lt;路径&gt;</code></p>
+</section>
+
+<!-- ============ 原理 1：渲染管线 ============ -->
+<section id="principle-render">
+  <p class="eyebrow">03 / Principle A</p>
+  <h2>一帧画面是怎么「算」出来的</h2>
+  <p class="q">先想一步：如果每一帧都要先清背景再 BitBlt，全屏时为什么会闪？答案决定了整个窗口方案。</p>
+  <p>因为分层窗口把整张位图连 alpha 一次性交给 DWM 合成，没有「先清后画」的中间态；<code>SourceConstantAlpha</code> 顺手就能做全局淡入淡出。渲染管线本身只有极光一处是新增的，其余沿用叠层版：</p>
+
+  <div class="pipe">
+    <div class="step"><div class="n">1</div><div class="body"><b>canvas.Clear()</b><span>清成透明画布（32 位预乘 alpha）</span></div></div>
+    <div class="step star"><div class="n">2</div><div class="body"><b>aurora::Draw()　★ 新增</b><span>极光帘幕 + 星点 + 深空背景，一次给出不透明底</span></div></div>
+    <div class="step"><div class="n">3</div><div class="body"><b>深度预通道（半分辨率）</b><span>所有网格只光栅化 z，保留 1/z 最大者；线段只有 1~2 px，半分辨率够用，遮挡边缘溢出反而像描边</span></div></div>
+    <div class="step"><div class="n">4</div><div class="body"><b>面填充（半透明）</b><span>给线框一点体积感；背景不透明时极光直接加色，比 alpha 混合快约 40%</span></div></div>
+    <div class="step"><div class="n">5</div><div class="body"><b>特征边</b><span>硬边（折痕 / 边界）+ 软边（共面剖分，只给地形）；地形折痕阈值单独放宽到 0.80（约 36°），否则带噪声高度场会整片亮成绿网</span></div></div>
+    <div class="step"><div class="n">6</div><div class="body"><b>HUD（仅叠层版）</b><span>GDI 抗锯齿文字，明确标注「数据由 MockScene 合成」</span></div></div>
+    <div class="step"><div class="n">7</div><div class="body"><b>Present</b><span>UpdateLayeredWindow + 全局 alpha；<code>--scale 0.833</code> 按 1600×900 渲染，DWM 拉伸到屏幕</span></div></div>
+  </div>
+
+  <div class="callout">
+    <b>为什么启动动画只有 37 fps 却看起来流畅？</b>
+    <p>三个手段叠出来的：强度与颜色做 256 级 LUT，<code>sin</code>/<code>pow</code> 每列只算一次（1920 列约 0.3 ms），内层像素循环只剩查表 + 一次混合；不透明底直接加色少一次乘法；渲染分辨率降一档让像素数减到 69%，帧时间从 43 ms 降到 26 ms。柔和的光本来就吃得起这点线条软化。</p>
+  </div>
+
+  <div class="cols">
+    <div>
+      <h3>时间轴</h3>
+      <pre><span class="c">// 相机 ease-out cubic：起步快、收尾慢</span>
+0.0s          黑场，R = 2650
+0.0 ~ 2.4s    淡入 + 推近，仰角略降
+2.4 ~ N-1.4s  环绕 <span class="k">0.085 rad/s</span>，极光持续漂移
+N-1.4s ~ N    淡出
+ESC/空格/点击  0.4s 快速淡出</pre>
+    </div>
+    <div>
+      <h3>性能账（1920×1080，空闲机器）</h3>
+      <ul class="clean">
+        <li>叠层版 · 深度 <b>3.6 ms</b> / 填充 <b>5.9 ms</b></li>
+        <li>叠层版 · 特征边 <b>7.2 ms</b> / HUD <b>7.9 ms</b></li>
+        <li>叠层版 · 总计 <b>25~26 ms（约 39 fps）</b></li>
+        <li>启动动画 · 极光 <b>~11 ms</b>（1600×900）</li>
+        <li>启动动画 · 总计 <b>26~28 ms（约 37 fps）</b></li>
+        <li>系统重负载时降到 <b>~20 fps</b>（软件渲染抢不到 CPU）</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 原理 2：极光 ============ -->
+<section id="principle-aurora">
+  <p class="eyebrow">04 / Principle B</p>
+  <h2>极光的颜色不是调出来的，是查出来的</h2>
+  <p class="q">想一想：照片里的极光常常是「纯绿一片」，但肉眼见的帘幕为什么顶上泛紫？</p>
+  <p>因为颜色来自高层大气里原子 / 分子的电子跃迁，按高度分层。相机过曝把上部压成了绿色，真实色标从下往上其实是这样：</p>
+
+  <div class="spectrum">
+    <div class="bar"></div>
+    <div class="labels"><span>底边 · 蓝紫锐利</span><span>主体 · 黄绿 / 翠绿</span><span>上部 · 淡青 → 紫 → 品红</span></div>
+  </div>
+
+  <table style="margin-top:22px">
+    <thead><tr><th>波长</th><th>来源</th><th>颜色</th><th>高度</th></tr></thead>
+    <tbody>
+      <tr><td>557.7 nm</td><td>氧原子 O(¹S → ¹D)</td><td>亮黄绿</td><td>100~150 km</td></tr>
+      <tr><td>427.8 nm</td><td>氮分子 N₂⁺ 第一负带</td><td>蓝紫（帘幕底边）</td><td>100 km 以下</td></tr>
+      <tr><td>630.0 nm</td><td>氧原子 O(¹D → ³P)</td><td>暗红</td><td>200~400 km</td></tr>
+      <tr><td>红 / 品红</td><td>氮 + 氧的高能态</td><td>品红紫</td><td>高纬度强活动</td></tr>
+    </tbody>
+  </table>
+
+  <h3>形态：三个特征缺一不可</h3>
+  <p>下边缘锐利且呈波浪线、向上发散并淡成丝状、以及<strong>竖直的细密丝缕（rays）</strong>。少了第三条，就只是一坨绿色渐变。</p>
+  <pre><span class="c">// 1. 下边缘：三个不可公约频率的正弦叠加，看不出周期</span>
+wave = <span class="k">0.62</span>·sin(u·5.83 + t·0.29)
+     + <span class="k">0.28</span>·sin(u·13.7 − t·0.44 + 1.7)
+     + <span class="k">0.10</span>·sin(u·31.1 + t·0.71 + 3.4)
+<span class="c">// 2. 高度：底部强、向上衰减</span>
+a = pow(1 − s, <span class="k">1.12</span>) × (1 − 0.22·s²)
+<span class="c">// 3. 丝缕：宽层做褶皱、窄层做细丝</span>
+rayWide = 0.35 + 0.65·sin(u·46 + t·0.9 + wave·2)²
+rayFine = (0.5 + 0.5·sin(u·213 + sin(u·7.3 + t·0.41)·1.9 + t·1.6))<span class="k">³</span></pre>
+  <p>两个参数是被画面逼出来的：衰减指数从 <code>1.55</code> 降到 <code>1.12</code>，否则 s &gt; 0.8 处几乎归零，<strong>顶部的蓝紫和品红完全看不见</strong>；丝缕幂从 <code>7</code> 降到 <code>3</code>，7 次方细得像下雨，3 次方才是「光幕褶皱」的量级。相位里再叠一层低频扰动，否则条纹整齐得像百叶窗。</p>
+  <p>另外画两层帘幕（主帘幕 1.00 / 上层 1.10，色标偏移 +105 把高处推向紫红），这样高处自带紫色，不必把整条 LUT 都往紫调、连低处一起染紫。</p>
+
+  <div class="grid g2">
+    <figure style="margin:24px 0 0;border:1px solid var(--line);border-radius:12px;overflow:hidden">
+      <img src="3D/shots/aur5.png" alt="极光帘幕与星点效果图" loading="lazy">
+      <figcaption style="font:11px/1.5 var(--mono);color:var(--dim);padding:8px 10px;background:rgba(0,0,0,.25)">3D/shots/aur5.png · 双层帘幕 + 竖直丝缕 + 星点</figcaption>
+    </figure>
+    <figure style="margin:24px 0 0;border:1px solid var(--line);border-radius:12px;overflow:hidden">
+      <img src="3D/shots/timeline.png" alt="启动动画时间轴分镜" loading="lazy">
+      <figcaption style="font:11px/1.5 var(--mono);color:var(--dim);padding:8px 10px;background:rgba(0,0,0,.25)">3D/shots/timeline.png · 推近 → 环绕 → 淡出</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ============ 原理 3：木构 ============ -->
+<section id="principle-structure">
+  <p class="eyebrow">05 / Principle C</p>
+  <h2>为什么房子要「抬起来」，而不是把地面压平</h2>
+  <p class="q">地形起伏 ±70 cm，地板贴地会被穿模。你会怎么修？</p>
+  <p>第一版贴地：房间 footprint 里 484 个采样点有 <strong>240 个（正好一半）高过地板</strong>，从开口看进去地板上长出一片绿色网格。第二版把房间内地形压到 -5 并平滑过渡 —— 技术上解决了，但房子四周留了一圈被削平的台面，<strong>比穿模还假</strong>。</p>
+  <p>第三版的思路是反过来的：<strong>地形一行不改，把房子整体抬起来</strong>。<code>LIFT = 140</code>，房间内地形最高 69，净空 71 cm；地板、墙、柱、动态物体全部 +LIFT，相对关系一点没变。架空必然要支撑，于是有了木柱 → 圈梁 → 桁架。</p>
+
+  <div class="grid g2">
+    <article class="card">
+      <h4>倒三角斜撑：几何上的必然</h4>
+      <p>矩形框架（两柱 + 上下横杆）在侧向力下可变形 —— 四个角角度可以任意变，形状不唯一。加一条斜边后三边长度固定，形状锁死，这就是「三角形具有稳定性」的几何依据。每面一个，共 4 面 × 2 根 = <strong>8 根斜撑</strong>。</p>
+      <pre style="margin-bottom:0"><span class="c">AppendBeam：给两点 a,b 直接生成方梁</span>
+u = normalize(cross(d, ref))
+v = cross(d, u)   <span class="c">// (u,v,d) 右手系</span>
+<span class="c">// 于是 AppendBox 的 36 项索引表可原样照抄</span>
+<span class="c">// |d.z| &gt; 0.95 时 ref 换 (1,0,0)，避免叉乘退化</span></pre>
+    </article>
+    <article class="card">
+      <h4>5×5 瓷砖与那条「必须保留」的修复</h4>
+      <p>每块 166.7 cm、留 2 cm 缝、砖顶比楼板高 5 cm。缝里露出的<strong>是楼板顶面</strong>，填充密度不同，缝自然比砖暗 —— 格线不用额外画。</p>
+      <p>但 <code>HoloOverlay.h</code> 里软边只画地形这条修复是前提：</p>
+      <pre style="margin-bottom:0">softPairs = (layer == Layer::Terrain)
+            ? el.soft.size() / 2 : <span class="k">0</span>;</pre>
+      <p style="margin:12px 0 0">否则 box 每个面的共面剖分对角线会在拆成 25 块后变成<strong>满屏斜虚线，像碎玻璃</strong>。这不是优化，是瓷砖方案能成立的条件。</p>
+    </article>
+  </div>
+</section>
+
+<!-- ============ 原理 4：2D → 3D ============ -->
+<section id="principle-map">
+  <p class="eyebrow">06 / Principle D</p>
+  <h2>一张平面图，怎么变成立体模型</h2>
+  <p class="q">单张正交俯视图里没有高度信息。你会拿什么当海拔的代理？</p>
+  <p>从一张俯视图恢复 3D，本质是三件事：<strong>平面位置由网格标定</strong>、<strong>高度由亮度代理</strong>、<strong>建筑由颜色规则检测</strong>。</p>
+
+  <div class="grid g3">
+    <article class="card">
+      <span class="tag">STEP 1</span>
+      <h4>平面位置 · 网格标定</h4>
+      <p>对每列 / 每行求平均灰度，网格线亮度明显偏离邻居，找出精确位置：</p>
+      <pre style="font-size:11.5px">竖线 x = 34,142,250,358,466,574
+横线 y =    108,216,324,432
+间距全部 <span class="k">108 px</span>（零误差）
+1 px = 100/108 = <span class="k">0.9259 m</span></pre>
+      <p style="margin-bottom:0;font-size:13px">这套比例贯穿全流程；换图时用 <code>--cell-m</code> 重标定。</p>
+    </article>
+    <article class="card">
+      <span class="tag">STEP 2</span>
+      <h4>高度 · 双尺度亮度分解</h4>
+      <p>沙漠地图里「亮 = 砂石高地，暗 = 沟谷 / 植被洼地」，但不能直接用灰度：</p>
+      <pre style="font-size:11.5px">h = (大尺度模糊 σ≈40px − 均值)×<span class="k">0.55</span>
+  + (中尺度 σ≈10px − 大尺度)×<span class="k">0.40</span></pre>
+      <p style="margin-bottom:0;font-size:13px">中尺度那项是关键：干河床是窄暗带，只做一次大模糊会被抹平，只有「中 − 大」才能把它作为负值凸显成凹沟。</p>
+    </article>
+    <article class="card">
+      <span class="tag">STEP 3</span>
+      <h4>建筑 · 亮且暖的规则块</h4>
+      <p>先采样确认颜色特征，再定判据 <code>亮度 &gt; 145 且 18 ≤ 饱和度 ≤ 80</code>，一次性排除过暗地面 / 沟壑与纯中性灰的 UI 图标。</p>
+      <p style="margin-bottom:0;font-size:13px">屋顶 (208,196,163) 饱和 45 · 车辆图标 (238,238,238) 饱和 0 · 地面 (70,65,54) 亮度 70。限定 4 个聚落 ROI 得 <strong>11 个 bbox</strong>，挤出盒体 + 四坡顶，高 6~15 m。</p>
+    </article>
+  </div>
+
+  <h3>两个必须处理的坑</h3>
+  <div class="grid g2">
+    <article class="card">
+      <h4>坑 1 · 屋顶会隆起成山</h4>
+      <p>屋顶亮度 200+，直接拿灰度算高度，每栋房子下面都会顶起一座小山，房子叠上去变成「悬空楼阁」。</p>
+      <p style="margin-bottom:0"><strong>做法</strong>：先建「建筑 + UI」mask，在低分辨率网格上做迭代扩散填补（每轮由外向内填掉一圈，60 轮覆盖最宽 30 px 建筑），把屋顶从灰度图里抹掉再算高度。</p>
+    </article>
+    <article class="card">
+      <h4>坑 2 · 房子会半陷进坡里</h4>
+      <p>房基位置仍是原始地形高度，按 bbox 挤出就会陷进去或悬空。</p>
+      <p style="margin-bottom:0"><strong>做法</strong>：按每个建筑 bbox 取<strong>外围两格一圈</strong>地形高度的中位数作为 <code>ground_z</code>，再把 bbox 内地形统一压到这个高度。<code>meta.json</code> 里中央房群在 13.55~15.55 m 台地、右上聚落 1.90 m、底部村庄一栋 -2.20 m。</p>
+    </article>
+  </div>
+
+  <div class="callout">
+    <b>验证比盯着渲染图猜快十倍</b>
+    <p>整套流程里反复用到同一条链路：<code>--obj</code> 导出全部网格 → 算包围盒 → 统计顶点 z 分布。最后 <code>validate_obj.py</code> 校验结果：索引越界 0、退化面 0、地形 39,920 面朝上 0 翻面。预览渲染器是纯 PIL 手写的 —— 画家算法排序 + 朗伯光照 + 2× 超采样 + 地形裙边 + 建筑投影，不需要 numpy。</p>
+  </div>
+
+  <div class="grid g2">
+    <figure style="margin:0;border:1px solid var(--line);border-radius:12px;overflow:hidden">
+      <img src="map3d/preview_persp.png" alt="斜视透视效果图，展示地形起伏" loading="lazy">
+      <figcaption style="font:11px/1.5 var(--mono);color:var(--dim);padding:8px 10px;background:rgba(0,0,0,.25)">map3d/preview_persp.png · 地形起伏</figcaption>
+    </figure>
+    <figure style="margin:0;border:1px solid var(--line);border-radius:12px;overflow:hidden">
+      <img src="map3d/preview_iso.png" alt="等轴测效果图，展示建筑分布" loading="lazy">
+      <figcaption style="font:11px/1.5 var(--mono);color:var(--dim);padding:8px 10px;background:rgba(0,0,0,.25)">map3d/preview_iso.png · 建筑分布</figcaption>
+    </figure>
+  </div>
+
+  <h3>已知假设（无法从单张截图严格证实）</h3>
+  <ul class="clean">
+    <li><b>比例尺</b>：按 PUBG 一格 = 100 m 计算；若不同，用 <code>--cell-m</code> 改，几何形状不变，只是整体缩放。</li>
+    <li><b>高度基准</b>：亮度当海拔是定性近似而非真实 DEM；沟壑山脊的走向对，绝对高程是推出来的（重建高差 60 m）。</li>
+    <li><b>建筑高度</b>：图上无高度信息，按「宽 × 0.30，限 6~15 m」推定，比单层房实际 5~7 m 偏大。</li>
+    <li><b>边界裁切</b>：右上聚落与底部村庄被图片边界切断，模型只包含可见部分。</li>
+    <li><b>输入约束</b>：必须是正交俯视图；斜视 / 带旋转的截图会让网格检测失准。建筑是无门窗的灰盒。</li>
+  </ul>
+</section>
+
+<!-- ============ 限制与构建 ============ -->
+<section id="limits">
+  <p class="eyebrow">07 / Limits & Build</p>
+  <h2>边界在哪，以及怎么自己改</h2>
+  <div class="cols">
+    <div>
+      <h3>已知限制</h3>
+      <ul class="clean">
+        <li>软件渲染帧率不高：空闲约 37 fps，开大型游戏会掉到 <b>20 fps</b> 左右。</li>
+        <li>独占全屏应用在前台会盖住启动动画 —— <code>WS_EX_TOPMOST</code> 管不了绕过 DWM 的游戏。</li>
+        <li><b>没有真实 DMA 数据</b>：场景来自 <code>MockScene.h</code> 合成几何，<code>Offset.h</code> 偏移是历史版本，接真机需重扫。</li>
+        <li>极光逐像素 CPU 计算，未用 GPU；想上 60 fps 得改 D3D11 compute / pixel shader，代价是丢掉「零依赖单 exe」。</li>
+        <li>map3d 建筑为灰盒；相邻建筑被院墙连成一片时会合并成一个体块。</li>
+      </ul>
+    </div>
+    <div>
+      <h3>快速开始</h3>
+      <pre><span class="c">:: 看启动动画（全屏 9 秒，可跳过）</span>
+3D\AuroraLauncher.exe
+
+<span class="c">:: 看桌面叠层（中键拖动转视角，F8 退出）</span>
+3D\PhysxPUBGMock.exe
+
+<span class="c">:: 重新编译（MSVC 14.44.35207 + SDK 10.0.26100.0）</span>
+cd 3D &amp;&amp; build.cmd
+
+<span class="c">:: 重新生成 3D 模型</span>
+python map3d/build_map3d.py --step 2
+python map3d/render_preview.py all
+python map3d/validate_obj.py</pre>
+      <p class="hint">编译脚本不依赖 <code>vcvars64.bat</code>（它会调 <code>reg.exe</code> 被本机策略拦），直接写死 INCLUDE / LIB；换机器改 <code>build.cmd</code> 顶部三行路径。</p>
+    </div>
+  </div>
+
+  <div class="grid g2" style="margin-top:26px">
+    <article class="card">
+      <h4>后续方向（按改动量 / 收益排序）</h4>
+      <p style="margin-bottom:0">① 分色（Wood / Tile / Wall）视觉收益最大 · ② 天空预设表 · ③ 场景配置外置到 <code>scene.ini</code> · ④ 极光挪 GPU 省 11 ms · ⑤ 关键帧运镜 Catmull-Rom · ⑥ 真正的启动器外壳（进度 / 文案 / 音效 / 超时兜底）· ⑦ 接真实 DMA（保留 mock 作回归测试床）。详见 <code>实现方向.md</code>。</p>
+    </article>
+    <article class="card">
+      <h4>仓库文档</h4>
+      <p style="margin-bottom:0"><code>README.md</code> 总览与快速开始 · <code>使用手册.md</code> 全部命令行参数与调参位置 · <code>制作思路.md</code> 设计决策与 12 条踩坑清单 · <code>实现方向.md</code> 短 / 中 / 长期路线与技术债 · <code>map3d/README.md</code> 重建流程与全部可调常量。</p>
+    </article>
+  </div>
+</section>
+
+<footer>
+  <div class="row">
+    <div>
+      <div style="color:var(--fg);font-weight:700;margin-bottom:6px">3D 模型构建 · 3D Model Construction</div>
+      <div>纯 CPU 软件光栅器 / 2D→3D 地图重建 · 全部内容随 <code>main</code> 分支开源</div>
+    </div>
+    <div class="foot-links">
+      <a href="https://github.com/180lisilence/3D-model-construction" target="_blank" rel="noopener">GitHub ↗</a>
+      <a href="https://github.com/180lisilence/3D-model-construction/archive/refs/heads/main.zip">下载 ZIP ↓</a>
+      <a href="#principle-render">原理 ↑</a>
+    </div>
+  </div>
+  <p style="margin:22px 0 0;font-size:12px;color:var(--dim)">留一个问题给读到这里的你：如果保留「离线可用、零外部依赖」这条约束不变，还能把帧率再翻一倍吗？<span style="color:var(--muted)">提示 —— <code>实现方向.md</code> 的技术债表里，有一行写着「深度预通道按扫描线分块多线程（收益约 2×）」。</span></p>
+</footer>
+
+</div>
+</body>
+</html>
